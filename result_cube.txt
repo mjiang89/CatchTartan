@@ -1,0 +1,11 @@
+work_dir: data
+input_file: cube
+dim: 4
+metric: 2
+depth: 5
+seedsize: 3
+num_seeds: 3
+num_threads: 3
+max_iter: 30
+01 2 4 2 2 12 22 0.40256
+1 2 2 2 3 21 48 0.45205
