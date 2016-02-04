@@ -9,15 +9,6 @@
 #include <vector>
 using namespace std;
 
-// t: timestr
-// 0: username
-// 1: location
-// 2: list of phrases
-// 3: list of hashtags
-// 4: list of urls
-// 5: list of rtnames
-// 6: list of atnames
-
 typedef double real;
 typedef long long bits;
 
@@ -33,8 +24,18 @@ struct Tartan {
 	set<int> *valuesetlist;
 };
 
-const int seed_dim = 0; // 0: user, 2: phrase, 3: hashtag, 4: URL
-const int bounds[10] = {2,2,3,2,2,2,2,2,2,2};
+// t: timestr
+// 0: username
+// 1: location
+// 2: list of phrases
+// 3: list of hashtags
+// 4: list of urls
+// 5: list of rtnames
+// 6: list of atnames
+const int seed_dim = 2; // seeding with the "phrase" dimension
+// 0:time, 1: user, 2: location, 3: phrase, 4: hashtag, 5: URL
+const int bounds[10] = {30,2,2,10,2,2,2,2,2,2};
+const double _decay = 0.01;
 
 string workdir, datafile, valuefile, outfile;
 int num_threads, num_seeds, sz_seed, max_iter;
@@ -193,24 +194,48 @@ void GenerateSeed(struct Tartan &tartan, unsigned long long &randseed) {
 }
 
 void OutputTartan(struct Tartan &tartan, double timecost, int num_iter, int thread_id, int seed_id) {
-	int i, _t, t, b, num_tweet, value;
+	int i, j, sz_t, _t, t, b, sum_b, sum_e, value, count;
+	map<int, int> *value2count;
+	vector<pair<int, int> > value_count;	
 	set<int>::iterator iter_set;
 	vector<int>::iterator iter_vector;
+	map<int, int>::iterator iter_map;
+	vector<pair<int, int> >::iterator iter_vector_pair;
+
+	sz_t = tartan.tlist.size();
+	sum_b = 0; sum_e = 0;
+	value2count = new map<int, int>[num_dims];
+	for (_t = 0;_t < sz_t;_t++) {
+		t = tartan.tlist[_t];
+		sum_b += tartan.blist[_t].size();
+		for (iter_vector = tartan.blist[_t].begin();iter_vector != tartan.blist[_t].end();iter_vector++) {
+			b = *iter_vector;
+			for (i = 0;i < num_dims;i++) {
+				if (tartan.dimlist[i]) {
+					for (j = 0;j < behaviorlist[t][b][i].sz;j++) {
+						value = behaviorlist[t][b][i].values[j];
+						iter_set = tartan.valuesetlist[i].find(value);
+						if (iter_set != tartan.valuesetlist[i].end()) {
+							value2count[i][value]++;
+							sum_e++;
+						}
+					}
+				}
+			}
+		}
+	}
+	
 	string file = workdir+outfile+itos(thread_id)+"_"+itos(seed_id)+".txt";
 	cout << "Output " << file << endl;
 	ofstream fw(file);
-	fw << "thread_id|seed_id|num_tweet|num_iter|timecost\n";
-	num_tweet = 0;
-	for (i = 0;i < tartan.tlist.size();i++) {
-		num_tweet += tartan.blist[i].size();
-	}
-	fw << thread_id << "|" << seed_id << "|" << num_tweet << "|" << num_iter << "|" << timecost << "\n";
+	fw << "thread_id|seed_id|num_behavior|num_entries|num_iter|timecost\n";
+	fw << thread_id << "|" << seed_id << "|" << sum_b << "|" << sum_e << "|" << num_iter << "|" << timecost << "\n";
 	fw << "sz_time";
 	for (i = 0;i < num_dims;i++) {
 		fw << "|sz_dim[" << i << "]";
 	}
 	fw << "\n";
-	fw << tartan.tlist.size();
+	fw << sz_t;
 	for (i = 0;i < num_dims;i++) {
 		if (tartan.dimlist[i]) {
 			fw << "|" << tartan.valuesetlist[i].size();
@@ -219,19 +244,26 @@ void OutputTartan(struct Tartan &tartan, double timecost, int num_iter, int thre
 		}
 	}
 	fw << "\n";
-	for (t = 0;t < tartan.tlist.size();t++) {
-		value = tartan.tlist[t];
-		fw << '@' << "t" << "|" << value << "|" << valuelist[0][value] << "\n";
+	for (_t = 0;_t < sz_t;_t++) {
+		value = tartan.tlist[_t];
+		count = tartan.blist[_t].size();
+		fw << '@' << "t" << "|" << count << "|" << value << "|" << valuelist[0][value] << "\n";
 	}
 	for (i = 0;i < num_dims;i++) {
 		if (tartan.dimlist[i]) {
-			for (iter_set = tartan.valuesetlist[i].begin();iter_set != tartan.valuesetlist[i].end();iter_set++) {
-				value = *iter_set;
-				fw << '@' << i << "|" << value << "|" << valuelist[i+1][value] << "\n";
+			value_count.clear();
+			for (iter_map = value2count[i].begin();iter_map != value2count[i].end();iter_map++) {
+				value_count.push_back(*iter_map);
+			}
+			sort(value_count.begin(), value_count.end(), value_comparer);
+			for (iter_vector_pair = value_count.begin();iter_vector_pair != value_count.end();iter_vector_pair++) {
+				value = iter_vector_pair->first;
+				count = iter_vector_pair->second;
+				fw << '@' << i << "|" << count << "|" << value << "|" << valuelist[i+1][value] << "\n";
 			}
 		}
 	}
-	for (_t = 0;_t < tartan.tlist.size();_t++) {
+	for (_t = 0;_t < sz_t;_t++) {
 		t = tartan.tlist[_t];
 		for (iter_vector = tartan.blist[_t].begin();iter_vector != tartan.blist[_t].end();iter_vector++) {
 			b = *iter_vector;
@@ -338,12 +370,14 @@ int UpdateDimension(struct Tartan &tartan, int dim) {
 		return -1;
 	}
 	for (iter_map = value2count.begin();iter_map != value2count.end();iter_map++) {
-		if (iter_map->second >= bounds[dim]) {
+		if (iter_map->second >= bounds[dim+1]) {
 			valueset.insert(iter_map->first);
 		}
 	}
-	if (valueset.size() == 0) {
+	sz = valueset.size();
+	if (sz == 0 || sz == GetNumBehavior(tartan)) {
 		tartan.dimlist[dim] = false;
+		tartan.valuesetlist[dim].clear();
 		return -1;
 	}
 	tartan.dimlist[dim] = true;
@@ -352,12 +386,13 @@ int UpdateDimension(struct Tartan &tartan, int dim) {
 }
 
 int AddFirstSlice(struct Tartan &tartan) {
-	int sz_t, t;
+	int sz_t, t, bound;
 	sz_t = tartan.tlist.size();
 	t = tartan.tlist[0];
 	if (t == 0) {
 		return -1;
 	}
+	bound = (int) (tartan.blist[0].size() * _decay);
 	t--;
 
 	int b, i, j, value;
@@ -391,7 +426,7 @@ int AddFirstSlice(struct Tartan &tartan) {
 			bs.push_back(b);
 		}
 	}
-	if (bs.size() == 0) {
+	if (bs.size() < bounds[0]) {
 		return -1;
 	}
 	tartan.tlist.insert(tartan.tlist.begin(), t);
@@ -400,12 +435,13 @@ int AddFirstSlice(struct Tartan &tartan) {
 }
 
 int AddLastSlice(struct Tartan &tartan) {
-	int sz_t, t;
+	int sz_t, t, bound;
 	sz_t = tartan.tlist.size();
 	t = tartan.tlist[sz_t-1];
 	if (t == num_slices-1) {
 		return -1;
 	}
+	bound = (int) (tartan.blist[sz_t-1].size() * _decay);
 	t++;
 
 	int b, i, j, value;
@@ -439,7 +475,7 @@ int AddLastSlice(struct Tartan &tartan) {
 			bs.push_back(b);
 		}
 	}
-	if (bs.size() == 0) {
+	if (bs.size() < bounds[0]) {
 		return -1;
 	}
 	tartan.tlist.push_back(t);
@@ -449,7 +485,7 @@ int AddLastSlice(struct Tartan &tartan) {
 
 int RemoveFirstSlice(struct Tartan &tartan) {
 	int sz_t = tartan.tlist.size();
-	if (sz_t <= 1 || tartan.blist[0].size() > 0) {
+	if (sz_t <= 1 || tartan.blist[0].size() >= bounds[0]) {
 		return -1;
 	}
 	tartan.tlist.erase(tartan.tlist.begin());
@@ -459,7 +495,7 @@ int RemoveFirstSlice(struct Tartan &tartan) {
 
 int RemoveLastSlice(struct Tartan &tartan) {
 	int sz_t = tartan.tlist.size();
-	if (sz_t <= 1 || tartan.blist[sz_t-1].size() > 0) {
+	if (sz_t <= 1 || tartan.blist[sz_t-1].size() >= bounds[0]) {
 		return -1;
 	}
 	tartan.tlist.pop_back();
@@ -471,7 +507,7 @@ void *CatchTartanThread(void *id) {
 	unsigned long long thread_id = (long long)id;
 	unsigned long long randseed = (long long)id+1;
 	int seed_id, it, i;
-	int num_behavior_prev, num_behavior;
+	int num_behavior_prev, num_behavior, count_prev;
 	clock_t start, finish;
 
 	for (seed_id = 0;seed_id < num_seeds;seed_id++) {
@@ -482,6 +518,7 @@ void *CatchTartanThread(void *id) {
 //		PrintTartan(tartan, "iter 0 SEED");
 
 		num_behavior_prev = GetNumBehavior(tartan);
+		count_prev = 0;
 		start = clock();
 		for (it = 0;it < max_iter;it++) {
 			// 0. update a dimension i
@@ -504,9 +541,12 @@ void *CatchTartanThread(void *id) {
 //			PrintTartan(tartan, "iter "+itos(it+1)+" RLS");
 			num_behavior = GetNumBehavior(tartan);
 			if (num_behavior == num_behavior_prev) {
-				break;
+				count_prev++;
+			} else {
+				num_behavior_prev = num_behavior;
+				count_prev = 0;
 			}
-			num_behavior_prev = num_behavior;
+			if (count_prev == 3) break;
 		}
 		finish = clock();
 		double timecost = (double)(finish - start) / CLOCKS_PER_SEC;
